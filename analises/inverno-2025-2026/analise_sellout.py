@@ -88,7 +88,7 @@ def main(dados, sellout, estacao_estoque=None):
     estacao = json.load(open(estacao_estoque, encoding='utf-8')) if estacao_estoque else {}
     sem_venda_reclass = [s for s in por_sku if s not in vend.index and (estacao.get(s) or '').startswith('272')]
 
-    out = {'periodo': periodo, 'colecoes': [], 'fora_pedido': {
+    out = {'periodo': periodo, 'colecoes': [], 'precos': None, 'fora_pedido': {
         'pecas': int(fora['Qtde líquida'].sum()), 'valor': round(float(fora['Valor liquido'].sum()), 2),
         'skus': int(fora['sku'].nunique())},
         'reclass_verao27': {'skus': len(sem_venda_reclass),
@@ -98,6 +98,26 @@ def main(dados, sellout, estacao_estoque=None):
                        'desconto_valor': round(float(((so['PVL catálogo'] - so['PVL loja']) * so['Qtde líquida']).sum()), 2),
                        'desconto_50': int(so.loc[so['% desconto'] >= 0.5, 'Qtde líquida'].sum()),
                        'desconto_100': int(so.loc[so['% desconto'] >= 0.99, 'Qtde líquida'].sum())}}
+    # Preco cheio x mark down (classificacao da propria base; coleção do cadastro do produto)
+    so['tipo'] = so['Full price'].map({'Sim': 'cheio', 'Mark down': 'markdown'}).fillna('cheio')
+    so['catalogo'] = so['PVL catálogo'] * so['Qtde líquida']
+    faixa = pd.cut(so['% desconto'], [-1, 0, .1, .2, .3, .49, .99, 1.0],
+                   labels=['0', 'até 10%', '10–20%', '20–30%', '30–49%', '50–99%', '100%'])
+
+    def quebra(chave):
+        g = so.groupby([chave, 'tipo'], observed=True).agg(pecas=('Qtde líquida', 'sum'), venda=('Valor liquido', 'sum'),
+                                                           catalogo=('catalogo', 'sum'))
+        r = collections.defaultdict(dict)
+        for (k, t), v in g.iterrows():
+            r[str(k)][t] = {'pecas': int(v['pecas']), 'venda': round(float(v['venda']), 2),
+                            'desconto': round(float(v['catalogo'] - v['venda']), 2)}
+        return r
+    so['_total'] = 'total'
+    so['_faixa'] = faixa
+    out_precos = {'total': quebra('_total')['total'], 'colecao_cadastro': quebra('Coleção'), 'mes': quebra('mes'),
+                  'grupo': quebra('Grupo produto'),
+                  'faixa': {k: v['markdown'] for k, v in quebra('_faixa').items() if 'markdown' in v}}
+
     for c, a in sorted(col.items(), key=lambda x: -x[1]['comprado']):
         lista = [{'sku': s, **info[s], **{k: int(v) for k, v in k_.items()}} for s, k_ in skus[c].items()]
         lista.sort(key=lambda x: (x['vendido'] - x['faturado'], -x['faturado']))
@@ -105,6 +125,7 @@ def main(dados, sellout, estacao_estoque=None):
                                 **{k: round(v, 2) if isinstance(v, float) else v for k, v in a.items()},
                                 'meses': {m: round(q) for m, q in sorted(meses[c].items())},
                                 'skus': lista})
+    out['precos'] = out_precos
     return out
 
 
