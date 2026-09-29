@@ -94,7 +94,10 @@ def main(dados, sellout, estacao_estoque=None):
         'reclass_verao27': {'skus': len(sem_venda_reclass),
                             'pecas': sum(l['pecasFaturadas'] for s in sem_venda_reclass for _, l in por_sku[s])},
         'total_base': {'pecas': int(so['Qtde líquida'].sum()), 'valor': round(float(so['Valor liquido'].sum()), 2),
-                       'markdown': int(so['Qtde mark down'].sum()), 'trocas': int(so['Qtde trocada'].sum())}}
+                       'markdown': int(so['Qtde mark down'].sum()), 'trocas': int(so['Qtde trocada'].sum()),
+                       'desconto_valor': round(float(((so['PVL catálogo'] - so['PVL loja']) * so['Qtde líquida']).sum()), 2),
+                       'desconto_50': int(so.loc[so['% desconto'] >= 0.5, 'Qtde líquida'].sum()),
+                       'desconto_100': int(so.loc[so['% desconto'] >= 0.99, 'Qtde líquida'].sum())}}
     for c, a in sorted(col.items(), key=lambda x: -x[1]['comprado']):
         lista = [{'sku': s, **info[s], **{k: int(v) for k, v in k_.items()}} for s, k_ in skus[c].items()]
         lista.sort(key=lambda x: (x['vendido'] - x['faturado'], -x['faturado']))
