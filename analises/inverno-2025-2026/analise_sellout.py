@@ -1,11 +1,12 @@
-"""Inverno 2026: comprado x vendido real (base de sell out do ZZNet).
+"""Comprado x vendido real de uma estação (base de sell out do ZZNet).
 
-Cruza os pedidos da estação 264 (painel) com a base "sell out" exportada do ZZNet.
+Cruza os pedidos da estação (ex.: 264 = Inverno 2026, 254 = Inverno 2025) do painel com a base "sell out" exportada do ZZNet.
 A venda de cada SKU é atribuída à coleção do PEDIDO (não à do cadastro do produto),
 consumindo primeiro as peças que chegaram antes.
 
 Uso:
-  python3 analise_sellout.py dashboard-data.json sell_out.xlsx --estacao-estoque estacao_0207.json
+  python3 analise_sellout.py dashboard-data.json sell_out_2026.xlsx --estacao 264 --estacao-estoque estacao_02-07-2026.json
+  python3 analise_sellout.py dashboard-data.json sell_out_2025.xlsx --estacao 254 --saida inverno25_sellout
 A base de sell out tem CPF de cliente: ela não é salva aqui, só os totais.
 """
 import argparse, collections, csv, json
@@ -13,9 +14,6 @@ from datetime import datetime
 
 import pandas as pd
 
-NOMES = {'A01': 'INVERNO COLEÇÃO 1', 'A02': 'INVERNO COLEÇÃO 2', 'A03': 'INVERNO COLEÇÃO 3',
-         'A04': 'REPOSIÇÃO GA', 'A05': 'CICLOS'}
-CORTE = datetime(2026, 6, 30)
 
 
 def sku_norm(p):
@@ -30,15 +28,16 @@ def valor(s):
     return float(s.replace('.', '').replace(',', '.')) if s else 0.0
 
 
-def main(dados, sellout, estacao_estoque=None):
+def main(dados, sellout, estacao='264', estacao_estoque=None):
     d = json.load(open(dados, encoding='utf-8'))
     so = pd.read_excel(sellout)
     so['sku'] = so['SKU'].str.replace(' ', '.', regex=False)
     dt = pd.to_datetime(so['Data'], format='%d/%m/%Y')
     so['mes'] = dt.dt.month
     periodo = (dt.min().strftime('%d/%m/%Y'), dt.max().strftime('%d/%m/%Y'))
+    corte = dt.max().to_pydatetime()
 
-    linhas = [l for l in d['linhasPedidos'] if l['estacaoCod'] == '264' and l['status'] != 'Cancelado']
+    linhas = [l for l in d['linhasPedidos'] if l['estacaoCod'] == estacao and l['status'] != 'Cancelado']
     info, por_sku = {}, collections.defaultdict(list)
     for l in linhas:
         s = sku_norm(l['produto'])
@@ -55,14 +54,14 @@ def main(dados, sellout, estacao_estoque=None):
     meses = collections.defaultdict(collections.Counter)
     pedidos = collections.defaultdict(set)
     for s, ls in por_sku.items():
-        ls.sort(key=lambda x: x[0] or CORTE)
+        ls.sort(key=lambda x: x[0] or corte)
         v = vend.loc[s] if s in vend.index else None
         restante = max(0, int(v['qtd'])) if v is not None else 0
         total_vendido = restante
         for i, (_, l) in enumerate(ls):
-            c = NOMES.get(l['colecaoCod'], l['colecao'])
+            c = l['colecao']
             pedidos[c].add(l['pedido'])
-            fat_ate = l['pecasFaturadas'] if l['dataFaturado'] and data(l['dataFaturado']) <= CORTE else 0
+            fat_ate = l['pecasFaturadas'] if l['dataFaturado'] and data(l['dataFaturado']) <= corte else 0
             usa = min(restante, l['pecasFaturadas'])
             if i == len(ls) - 1:
                 usa = restante  # venda acima do faturado fica com o último pedido
@@ -85,13 +84,15 @@ def main(dados, sellout, estacao_estoque=None):
 
     # Venda de produtos Inverno 2026 que não vieram de pedido Inverno 2026 (compras de temporadas anteriores)
     fora = so[~so['sku'].isin(por_sku.keys())]
-    estacao = json.load(open(estacao_estoque, encoding='utf-8')) if estacao_estoque else {}
-    sem_venda_reclass = [s for s in por_sku if s not in vend.index and (estacao.get(s) or '').startswith('272')]
+    est_estoque = json.load(open(estacao_estoque, encoding='utf-8')) if estacao_estoque else {}
+    # SKU sem venda que o cadastro passou para outra estação: a venda pode ter ficado fora desta base
+    sem_venda_reclass = [s for s in por_sku if s not in vend.index and est_estoque.get(s)
+                         and not est_estoque[s].startswith(estacao)]
 
-    out = {'periodo': periodo, 'colecoes': [], 'precos': None, 'fora_pedido': {
+    out = {'estacao': estacao, 'periodo': periodo, 'colecoes': [], 'precos': None, 'fora_pedido': {
         'pecas': int(fora['Qtde líquida'].sum()), 'valor': round(float(fora['Valor liquido'].sum()), 2),
         'skus': int(fora['sku'].nunique())},
-        'reclass_verao27': {'skus': len(sem_venda_reclass),
+        'reclass': {'skus': len(sem_venda_reclass),
                             'pecas': sum(l['pecasFaturadas'] for s in sem_venda_reclass for _, l in por_sku[s])},
         'total_base': {'pecas': int(so['Qtde líquida'].sum()), 'valor': round(float(so['Valor liquido'].sum()), 2),
                        'markdown': int(so['Qtde mark down'].sum()), 'trocas': int(so['Qtde trocada'].sum()),
@@ -133,10 +134,11 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('dados')
     ap.add_argument('sellout')
-    ap.add_argument('--estacao-estoque')
+    ap.add_argument('--estacao', default='264', help='código da estação: 264 = Inverno 2026, 254 = Inverno 2025')
+    ap.add_argument('--estacao-estoque', help='JSON {sku: estação} do Relatório de Estoque')
     ap.add_argument('--saida', default='inverno26_sellout')
     a = ap.parse_args()
-    res = main(a.dados, a.sellout, a.estacao_estoque)
+    res = main(a.dados, a.sellout, a.estacao, a.estacao_estoque)
     json.dump(res, open(f'{a.saida}.json', 'w', encoding='utf-8'), ensure_ascii=False)
     with open(f'{a.saida}_por_colecao.csv', 'w', newline='', encoding='utf-8-sig') as f:
         w = csv.writer(f, delimiter=';')
@@ -159,4 +161,4 @@ if __name__ == '__main__':
         print(f"  {c['colecao']:20} ped {c['pedidos']:3} comp {c['comprado']:5} fat {c['faturado']:5} "
               f"(até jun {c['faturado_ate_jun']:5}) vend {c['vendido']:5} R$ {c['venda_valor']:>11,.2f} "
               f"custo R$ {c['custo']:>11,.2f} meses {c['meses']}")
-    print('fora de pedido Inverno 2026:', res['fora_pedido'], '| reclass Verão 27 sem venda:', res['reclass_verao27'])
+    print('vendido sem pedido desta estação:', res['fora_pedido'], '| sem venda e reclassificados:', res['reclass'])
