@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "amplia": {
+      "type": "http",
+      "url": "https://mcp.programaamplia.com.br/api/mcp"
+    }
+  }
+}
